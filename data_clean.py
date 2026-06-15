@@ -336,11 +336,91 @@ fifa_df = fifa_df.astype(data_types)
 fifa_df.info(memory_usage='deep')
 
 
+##################################################
+# STEP 17: HANDLE MISSING VALUES WITH IMPUTATION
+##################################################
+# Missing values can negatively impact analysis and modeling, so we handle them proactively
+# Different imputation methods are applied based on data type and contextual meaning
+
+# 1. Categorical Columns: Add 'Unknown' Category
+# For categorical columns, missing values are treated as a distinct category
+# This preserves the information that data was missing rather than assuming a value
+categorical_cols = fifa_df.select_dtypes(include=['category']).columns
+
+# Iterate through each categorical column to find and replace missing values
+for col in categorical_cols:
+    if fifa_df[col].isnull().any():
+        # Extend the category list to include 'Unknown' (pandas requires explicit category addition)
+        fifa_df[col] = fifa_df[col].cat.add_categories(['Unknown'])
+        # Fill all NaN values with the new 'Unknown' category
+        fifa_df[col] = fifa_df[col].fillna('Unknown')
+
+# 2. Numerical Performance & Physical Attributes: Impute with Median
+# Use the median (resistant to outliers) for performance metrics and physical measurements
+# Median is chosen over mean because it's more robust to extreme player values
+# Example: One exceptional striker's height shouldn't skew the imputation for missing heights
+median_impute_cols = ['ova', 'pot', 'bov', 'pac', 'sho', 
+                      'pas', 'dri', 'def', 'phy', 'height', 
+                      'weight', 'acceleration', 'sprint_speed', 'agility', 'balance', 
+                      'strength'
+                      ]                      
+
+# Filter to only columns that exist in the dataset (defensive coding for missing columns)
+valid_median_cols = [col for col in median_impute_cols if col in fifa_df.columns]
+
+# Replace missing values with the median of each column
+for col in valid_median_cols:
+    fifa_df[col] = fifa_df[col].fillna(fifa_df[col].median())
+
+# 3. Market Financials: Impute missing values with 0
+# If value or wage is missing, it usually means the player is a free agent or unvalued
+# A zero value is more realistic than assuming an average wage for uncontracted players
+financial_cols = ['value_euro', 'wage_euro', 'release_clause_euro', 'hits']
+valid_financial_cols = [col for col in financial_cols if col in fifa_df.columns]
+
+for col in valid_financial_cols:
+    fifa_df[col] = fifa_df[col].fillna(0)
+
+# 4. Joined Date: Impute with Median Date
+# Use the median date for missing 'joined' values
+# This represents a "typical" joining date without introducing bias toward recent or historic values
+if 'joined' in fifa_df.columns:
+    fifa_df['joined'] = fifa_df['joined'].fillna(fifa_df['joined'].median())
+
+# Display the resulting data structure after all numerical imputations
+fifa_df.info()
+
+# 5. Contract Dates: Context-Aware Imputation
+# Use contract_status to intelligently fill missing contract start/end dates
+# Different player statuses have different contract logic that we can leverage
+
+# Check how missing contract starts split across contract statuses
+fifa_df[fifa_df['contract_start'].isnull()]['contract_status'].value_counts(dropna=False)
+
+# Free Agents - Assign 0 since no contract exists
+# Free agents have no active contract, so start and end years should be 0 to indicate this
+free_mask = fifa_df['contract_status'] == 'Free Agent'
+fifa_df.loc[free_mask, 'contract_start'] = 0
+fifa_df.loc[free_mask, 'contract_end'] = 0
+
+# On Loan Players - Extract year from 'joined' column
+# For loaned players, we can infer when the loan started from their 'joined' date
+loan_mask = fifa_df['contract_status'] == 'On Loan'
+if 'joined' in fifa_df.columns:
+    # Safely extract just the year from the datetime object
+    joined_year = pd.to_datetime(fifa_df['joined']).dt.year.astype('Int16')
+    fifa_df.loc[loan_mask, 'contract_start'] = fifa_df.loc[loan_mask, 'contract_start'].fillna(joined_year)
+
+# Final Safety Net: If any active/loan players still have a missing contract_start, use the dataset Mode
+# After context-aware imputation, if any contract_start values are still missing, use the most common value
+# This ensures 100% data completeness and avoids any remaining NaN values
+most_common_start = fifa_df['contract_start'].mode()[0]
+fifa_df['contract_start'] = fifa_df['contract_start'].fillna(most_common_start)
+
 
 
 ######################################################################
-######################################################################
-# STEP 17: EXPORT CLEANED DATA IN MULTIPLE FORMATS
+# STEP 18: EXPORT CLEANED DATA IN MULTIPLE FORMATS
 ######################################################################
 
 # Saves the DataFrame as a CSV file without including the index row numbers
