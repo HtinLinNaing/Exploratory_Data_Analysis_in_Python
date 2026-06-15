@@ -397,25 +397,35 @@ fifa_df.info()
 # Check how missing contract starts split across contract statuses
 fifa_df[fifa_df['contract_start'].isnull()]['contract_status'].value_counts(dropna=False)
 
-# Free Agents - Assign 0 since no contract exists
-# Free agents have no active contract, so start and end years should be 0 to indicate this
-free_mask = fifa_df['contract_status'] == 'Free Agent'
-fifa_df.loc[free_mask, 'contract_start'] = 0
-fifa_df.loc[free_mask, 'contract_end'] = 0
+# Create a clean working Series copy
+clean_start = fifa_df['contract_start'].copy()
 
-# On Loan Players - Extract year from 'joined' column
-# For loaned players, we can infer when the loan started from their 'joined' date
-loan_mask = fifa_df['contract_status'] == 'On Loan'
-if 'joined' in fifa_df.columns:
-    # Safely extract just the year from the datetime object
-    joined_year = pd.to_datetime(fifa_df['joined']).dt.year.astype('Int16')
-    fifa_df.loc[loan_mask, 'contract_start'] = fifa_df.loc[loan_mask, 'contract_start'].fillna(joined_year)
+# Extract joined year fallback series
+joined_years = pd.to_datetime(fifa_df['joined']).dt.year
 
-# Final Safety Net: If any active/loan players still have a missing contract_start, use the dataset Mode
-# After context-aware imputation, if any contract_start values are still missing, use the most common value
-# This ensures 100% data completeness and avoids any remaining NaN values
-most_common_start = fifa_df['contract_start'].mode()[0]
-fifa_df['contract_start'] = fifa_df['contract_start'].fillna(most_common_start)
+# Calculate global mode safely
+start_mode_series = clean_start.dropna().mode()
+global_start_mode = start_mode_series[0] if not start_mode_series.empty else 2020 
+
+# Define Boolean masks
+is_free = fifa_df['contract_status'] == 'Free Agent'
+is_loan = fifa_df['contract_status'] == 'On Loan'
+
+# Apply modifications directly to the original Series using .loc or where expressions
+# This avoids the partial slice allocation error
+clean_start = clean_start.where(~is_free, 0)
+
+# Create a master series of loan years, filling missing ones with the global mode
+loan_years_filled = joined_years.fillna(global_start_mode)
+
+# Direct conditional replacement: if it's a loan player and currently null, fill it
+clean_start = clean_start.where(~(is_loan & clean_start.isna()), loan_years_filled)
+
+# Absolute catch-all fallback for any remaining nulls
+clean_start = clean_start.fillna(global_start_mode)
+
+# Write back to DataFrame and explicitly cast
+fifa_df['contract_start'] = clean_start.astype('Int16')
 
 
 
